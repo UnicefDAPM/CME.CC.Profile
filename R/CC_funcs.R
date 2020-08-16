@@ -14,7 +14,7 @@ read.results.csv.file <- function(
   dt_dir, 
   year_range = 1950:2019, 
   q = c("Lower", "Median", "Upper"), 
-  sex = "Total"
+  sex = NULL
   ){
   id_vars <- c("ISO.Code", "Quantile", "Indicator")
   if(grepl(".xlsx", dt_dir)){
@@ -27,7 +27,7 @@ read.results.csv.file <- function(
   if("ISO Code"%in%colnames(dt1)) setnames(dt1, "ISO Code", "ISO.Code")
   if(any(grepl("X", colnames(dt1)))){
     value_vars <- paste0("X", year_range, ".5")
-  } else if (any(grepl(".5", colnames(dt1)))) {
+  } else if (any(grepl(".5", colnames(dt1), fixed = TRUE))) {
     value_vars <- paste0(year_range, ".5")
   } else {
     value_vars <- paste0(year_range)
@@ -35,6 +35,8 @@ read.results.csv.file <- function(
   value_vars <- value_vars[value_vars%in%colnames(dt1)]
   if(grepl("U5MR", dt1$Indicator[1])) dt1$Indicator <- "Under-five Mortality Rate"
   if(grepl("IMR", dt1$Indicator[1])) dt1$Indicator <- "Infant Mortality Rate"
+  if(grepl("10q5", dt_dir))dt1$Indicator <- "Mortality for 5-14 year-olds"
+  if(grepl("10q15", dt_dir))dt1$Indicator <- "Mortality for 15-24 year-olds"
   # message("value_vars is ", paste(value_vars[1:5], collapse = ", "), "...")
   # message("colnames is ", paste(colnames(dt1)[1:10], collapse = ", "), "...")
   vars_wanted <- c(id_vars, value_vars)
@@ -45,6 +47,17 @@ read.results.csv.file <- function(
     dt1_long[, Year:= floor(as.numeric(sub("X","",Year)))]
   } else {
     dt1_long[, Year:= floor(as.numeric(Year))]
+  }
+  
+  # determine sex from dir
+  if(is.null(sex)){
+    if(grepl("female", dt_dir)){
+      sex <- "Female"
+    } else if (grepl("male", dt_dir)) {
+      sex <- "Male"
+    } else {
+      sex <- "Total"
+    }
   }
   dt1_long[, Sex:= sex]
   setkey(dt1_long, ISO.Code, Year)
@@ -287,6 +300,119 @@ save.CME.CC.profile <- function(iso0,
   saveWorkbook(wb, file = file_out)
   message(cname0, " CC profile saved in: ", file_out)
 }
+
+# Check -----
+check.CC.profile.data <- function(cc_dir, results_dir_list){
+  if(!dir.exists(cc_dir))stop("Check if cc_dir is correct")
+  if(any(!sapply(results_dir_list, file.exists))){
+    stop("Check results.csv directory: ", paste(names(results_dir_list)[!sapply(results_dir_list, file.exists)], collapse = ", "))
+  }
+  
+  # file.copy(from = file.path(cc_dir, "Côte d'Ivoire-CMR.xlsx"),
+  #           to = file.path(cc_dir, "Cote d Ivoire-CMR.xlsx"), overwrite = TRUE)
+  cc_files_names <- list.files(cc_dir, full.names = FALSE)
+  cc_files_names <- cc_files_names[!grepl("~", cc_files_names)]
+  cc_files_names <- cc_files_names[!grepl("DO NOT SEND", cc_files_names)]
+  cc_files <- list.files(cc_dir, full.names = TRUE)
+  cc_files <- cc_files[!grepl("~", cc_files)]
+  cc_files <- cc_files[!grepl("DO NOT SEND", cc_files)]
+  message("There are in total ", length(cc_files), " CC profiles.")
+  # all the vars to draw later 
+  vars <- do.call(paste, expand.grid(c("U5MR", "IMR", "NMR", "10q5", "10q15"), c("Median", "Lower", "Upper"), c("Total", "Male" ,"Female")))
+  
+  #' read CC xlsx profile data
+  read.cc.profile <- function(i){
+    cat('\014')
+    cat("Reading CC profile:", i, ":", cc_files_names[i], ";", paste0(round(i / length(cc_files_names) * 100), "%\n"))
+    cname <- sub("-CMR.xlsx", "", cc_files_names[i])
+    cfile <- cc_files[i]
+    # if(grepl("C?te d'Ivoire", cname)) cname <- "Cote d Ivoire" # the country name in the dataset
+    # if(grepl("C?te d'Ivoire", cfile)) cfile <- sub("C?te d'Ivoire", "Côte d'Ivoire", cfile, fixed = TRUE)
+    suppressMessages(
+      c1 <- na.omit(setDT(readxl::read_xlsx(cfile, sheet = "Table Under 5", skip = 7, n_max = 35)))
+    )
+    setnames(c1, "...1", "ind")
+    # rename the indicators
+    
+    # make the variables' order correct
+    c1$ind <- c(grep("U5MR", vars, value = TRUE), grep("IMR", vars, value = TRUE), 
+                grep("NMR", vars, value = TRUE)[1:3])
+    c1_long <- melt(c1, id.vars = "ind", variable.name = "year", variable.factor = FALSE)
+    
+    # read "Table 5-24"
+    suppressMessages(
+      c2 <- na.omit(setDT(readxl::read_xlsx(cfile, sheet = "Table 5–24", skip = 7, n_max = 15)))
+    )
+    setnames(c2, "...1", "ind")
+    c2$ind <- c(grep("10q5", vars, value = TRUE)[1:3], grep("10q15", vars, value = TRUE)[1:3])
+    c2_long <- melt(c2, id.vars = "ind", variable.name = "year", variable.factor = FALSE)
+    total_long <- rbindlist(list(c1_long, c2_long))
+    total_long$country <- cname
+    return(total_long)
+  }
+  dt_cc <- rbindlist(lapply(1: length(cc_files_names), read.cc.profile))
+  setcolorder(dt_cc, c("country",  "ind", "year", "value"))
+  setnames(dt_cc, "value", "CC_Value")
+  setkey(dt_cc, country)
+  # obtain ISO.Code 
+  dt_cname <- setDT(readRDS("dt_new_cnames.Rds"))
+  setkey(dt_cname, OfficialName)
+  dt_cc <- dt_cname[,.(OfficialName, ISO3Code)][dt_cc]
+  setnames(dt_cc, c("OfficialName", "ISO.Code", "Indicator",  "Year",  "CCProfile_Value"))
+  dt_cc[, Year:= as.numeric(Year)]
+  # fwrite(dt_cc, "output/Results_afterCC.csv")
+  
+  
+  
+  # 2. Load results.csv 
+  cat("Read in all the results.csv\n")
+  # a list of all the results files: 
+  year_range0 <-sort(unique(dt_cc$Year))
+  # combine original results 
+  dt_test <- read.results.csv.file(results_dir_list$mr5t14.t.in.path, year_range = year_range0)
+  dt_results_2020 <- rbindlist(lapply(results_dir_list, read.results.csv.file, year_range = year_range0))
+  setnames(dt_results_2020, "value", "Results")
+  ind_list <- list(
+    "Under-five Mortality Rate" = "U5MR",
+    "Infant Mortality Rate" = "IMR",
+    "Neonatal Mortality Rate" = "NMR",
+    "Mortality for 5-14 year-olds" = "10q5",
+    "Mortality for 15-24 year-olds" = "10q15"
+  )
+  dt_results_2020[, ind_short:= get.match(Indicator, new_list = ind_list)]
+  dt_results_2020[, table(ind_short)]
+  if(!dir.exists("Results_Data")) dir.create("Results_Data")
+  fwrite(dt_results_2020, "Results_Data/IGME2020_afterResults_all.csv")
+  
+  
+  # 3. make comparison 
+  dt_results_2020[, ind:= paste(ind_short, Quantile, Sex)]
+  dt_results_2020[, Year:= as.numeric(Year)]
+  setkey(dt_results_2020, ISO.Code, ind, Year)
+  setkey(dt_cc, ISO.Code, Indicator, Year)
+  dt_compare <- dt_cc[,.(ISO.Code, Indicator, Year, CCProfile_Value)][dt_results_2020[,.(ISO.Code, ind, Year, Results)]]
+  dt_compare[, Results_1 := roundoff(Results, 1)]
+  dt_compare[, diff :=  Results_1 - CCProfile_Value]
+  cat("\n")
+  if(length(dt_compare[is.na(diff), unique(Indicator)])>0) message("NA caused by missing data in the CC profile in these indicators: ", paste(dt_compare[is.na(diff), unique(Indicator)], collapse = ", "))
+  cat("\n")
+  if(length(dt_compare[is.na(diff), unique(ISO.Code)])>0) message("NA caused by missing data in the CC profile in these indicators: ", paste(dt_compare[is.na(diff), unique(ISO.Code)], collapse = ", "))
+  
+  cat("\n")
+  if(mean(dt_compare$diff, na.rm = TRUE)==0) {
+    cat("Check passed, cqt files match with results.csv\n")
+  } else {
+    message("Check the following ", dt_compare[diff>0, uniqueN(Indicator)]," indicators with unmatched values: ", paste(dt_compare[diff>0, unique(Indicator)], collapse = ", "))
+    message("Check the following ",dt_compare[diff>0, uniqueN(ISO.Code)] ," countries with unmatched values: ", paste(dt_compare[diff>0, unique(ISO.Code)], collapse = ", "))
+    message("comparison file saved as: ", "Compare_CCProfile_vs_Results.csv")
+    fwrite(dt_compare, "Compare_CCProfile_vs_Results.csv")
+  }
+  #
+  # if(file.exists(file.path(cc_dir, "Cote d Ivoire-CMR.xlsx"))) file.remove(file.path(cc_dir, "Cote d Ivoire-CMR.xlsx"))
+}
+
+# Extra -------------------------------------------------------------------
+
 
 #' a round function that Round off numbers in the conventional way instead of the R round
 #' In R, round(0.5) = 0
