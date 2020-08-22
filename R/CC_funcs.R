@@ -146,7 +146,12 @@ get.0_4.sources <- function(){
   dtall_survey[, surveys_combined := paste(unique(surveys), collapse = "; "), by = Country.Code]
   dtall_survey <- unique(dtall_survey[,.(Country.Code, surveys_combined)])
   # VR
-  dtall[Series.Type == "VR"& grepl("WHO", Series.Name), VR_range:= paste(range(floor(Reference.Date)), collapse = "-"), by = Country.Code]
+  dtall[ind=="U5MR"&Series.Type == "VR", `:=`(
+    VR_range= paste(range(floor(Reference.Date)), collapse = "-"),
+    year1 = range(floor(Reference.Date))[1],
+    year2 = range(floor(Reference.Date))[2]), by = Country.Code]
+  dtall[year1==year2, VR_range := year1] # in case same year 
+  
   dtall_VR <- na.omit(unique(dtall[,.(Country.Code, Country.Name, VR_range)]))
   return(list(survey = dtall_survey, vr = dtall_VR))
 }
@@ -168,7 +173,14 @@ get.5_24.sources <- function(){
   
   # VR
   dtall <- unique(rbindlist(list(dt5_14, dt15_24), fill = TRUE))
-  dtall[Series.Type == "VR", VR_range:= paste(range(floor(Reference.Date)), collapse = "-"), by = Country.Code]
+  dtall <- dtall[Visible==1]
+  dtall <- dtall[!Series.Name%like%"Derived from 5q0"][!Data.Source%like%"Derived from 5q0"][Series.Type == "VR"]
+  dtall <- get.new.sourceID(dtall)
+  dtall[, `:=`(
+    VR_range= paste(range(floor(Reference.Date)), collapse = "-"),
+    year1 = range(floor(Reference.Date))[1],
+    year2 = range(floor(Reference.Date))[2]), by = Country.Code]
+  dtall[year1==year2, VR_range := year1] # in case same year 
   dtall_VR <- na.omit(unique(dtall[,.(Country.Code, Country.Name, VR_range)]))
   setkey(dtall_VR, Country.Code)
   
@@ -302,6 +314,26 @@ save.CME.CC.profile <- function(iso0,
 }
 
 # Check -----
+read.all.results.csv <- function(results_dir_list, year_range0 = 1950:2019){
+  # a list of all the results files: 
+  # combine original results 
+  dt_test <- read.results.csv.file(results_dir_list$mr5t14.t.in.path, year_range = year_range0)
+  dt_results_2020 <- rbindlist(lapply(results_dir_list, read.results.csv.file, year_range = year_range0))
+  setnames(dt_results_2020, "value", "Results")
+  ind_list <- list(
+    "Under-five Mortality Rate" = "U5MR",
+    "Infant Mortality Rate" = "IMR",
+    "Neonatal Mortality Rate" = "NMR",
+    "Mortality for 5-14 year-olds" = "10q5",
+    "Mortality for 15-24 year-olds" = "10q15"
+  )
+  dt_results_2020[, ind_short:= get.match(Indicator, new_list = ind_list)]
+  dt_results_2020[, table(ind_short)]
+  if(!dir.exists("Results_Data")) dir.create("Results_Data")
+  fwrite(dt_results_2020, "Results_Data/IGME2020_afterCC_Results_all.csv")
+  dt_results_2020
+}
+
 check.CC.profile.data <- function(cc_dir, results_dir_list){
   if(!dir.exists(cc_dir))stop("Check if cc_dir is correct")
   if(any(!sapply(results_dir_list, file.exists))){
@@ -362,28 +394,10 @@ check.CC.profile.data <- function(cc_dir, results_dir_list){
   dt_cc[, Year:= as.numeric(Year)]
   # fwrite(dt_cc, "output/Results_afterCC.csv")
   
-  
-  
   # 2. Load results.csv 
   cat("Read in all the results.csv\n")
-  # a list of all the results files: 
   year_range0 <-sort(unique(dt_cc$Year))
-  # combine original results 
-  dt_test <- read.results.csv.file(results_dir_list$mr5t14.t.in.path, year_range = year_range0)
-  dt_results_2020 <- rbindlist(lapply(results_dir_list, read.results.csv.file, year_range = year_range0))
-  setnames(dt_results_2020, "value", "Results")
-  ind_list <- list(
-    "Under-five Mortality Rate" = "U5MR",
-    "Infant Mortality Rate" = "IMR",
-    "Neonatal Mortality Rate" = "NMR",
-    "Mortality for 5-14 year-olds" = "10q5",
-    "Mortality for 15-24 year-olds" = "10q15"
-  )
-  dt_results_2020[, ind_short:= get.match(Indicator, new_list = ind_list)]
-  dt_results_2020[, table(ind_short)]
-  if(!dir.exists("Results_Data")) dir.create("Results_Data")
-  fwrite(dt_results_2020, "Results_Data/IGME2020_afterResults_all.csv")
-  
+  dt_results_2020 <- read.all.results.csv(results_dir_list = results_dir_list, year_range0 = year_range0)
   
   # 3. make comparison 
   dt_results_2020[, ind:= paste(ind_short, Quantile, Sex)]
@@ -402,13 +416,28 @@ check.CC.profile.data <- function(cc_dir, results_dir_list){
   if(mean(dt_compare$diff, na.rm = TRUE)==0) {
     cat("Check passed, cqt files match with results.csv\n")
   } else {
-    message("Check the following ", dt_compare[diff>0, uniqueN(Indicator)]," indicators with unmatched values: ", paste(dt_compare[diff>0, unique(Indicator)], collapse = ", "))
-    message("Check the following ",dt_compare[diff>0, uniqueN(ISO.Code)] ," countries with unmatched values: ", paste(dt_compare[diff>0, unique(ISO.Code)], collapse = ", "))
+    message("Check the following ", dt_compare[diff!=0, uniqueN(Indicator)]," indicators with unmatched values: ", paste(dt_compare[diff!=0, unique(Indicator)], collapse = ", "))
+    message("Check the following ",dt_compare[diff!=0, uniqueN(ISO.Code)] ," countries with unmatched values: ", paste(dt_compare[diff!=0, unique(ISO.Code)], collapse = ", "))
     message("comparison file saved as: ", "Compare_CCProfile_vs_Results.csv")
     fwrite(dt_compare, "Compare_CCProfile_vs_Results.csv")
   }
   #
   # if(file.exists(file.path(cc_dir, "Cote d Ivoire-CMR.xlsx"))) file.remove(file.path(cc_dir, "Cote d Ivoire-CMR.xlsx"))
+}
+
+compare.results.vs.cqt <- function(dt_results, dt_cqt){
+  setkey(dt_results, ISO.Code, Quantile, ind_short, Year, Sex)
+  setkey(dt_cqt, ISO.Code, Quantile, ind_short, Year, Sex)
+  dt_results_vs_cqt <- dt_results[dt_cqt]
+  dt_results_vs_cqt[, diff :=  roundoff(Results,1) - roundoff(Value,1)]
+  dt_results_vs_cqt[diff!=0, ]
+  cat("\n")
+  if(mean(dt_results_vs_cqt$diff, na.rm = TRUE)==0) {
+    cat("Check passed, cqt files match with results.csv\n")
+  } else {
+    message("Check the following ", dt_results_vs_cqt[diff!=0, uniqueN(Indicator)]," indicators with unmatched values: ", paste(dt_results_vs_cqt[diff!=0, unique(Indicator)], collapse = ", "))
+    message("Check the following ",dt_results_vs_cqt[diff!=0, uniqueN(ISO.Code)] ," countries with unmatched values: ", paste(dt_results_vs_cqt[diff!=0, unique(ISO.Code)], collapse = ", "))
+  }
 }
 
 # Extra -------------------------------------------------------------------

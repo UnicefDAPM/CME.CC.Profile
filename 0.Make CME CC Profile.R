@@ -26,17 +26,13 @@ dt1 <- get.table.by.iso(iso0 = "TKM")
 
 # Get Source ---- 
 CME_sources <- get.0_4.sources()
-
 CME_sources5_24 <- get.5_24.sources()
-CME_sources_vr5_24 <- CME_sources5_24$vr
-CME_sources_survey5_14 <- CME_sources5_24$survey1 # as they are seperate cells
-CME_sources_survey15_24 <- CME_sources5_24$survey2
 
 # make profile ---- 
 fig_dir <- "../2020_CME_Plots/fig2020AfterCC/"
 fig_dirs <- list.files(fig_dir, pattern = ".png", recursive = TRUE, full.names = TRUE)
 save.CME.CC.profile("TKM", dir_save = here::here(""))
-# invisible(lapply(isos, save.CME.CC.profile, dir_save = here::here("AfterCC")))
+# invisible(lapply(isos, save.CME.CC.profile, dir_save = here::here("AfterCC_Profiles")))
 
 
 # check results ---- 
@@ -58,7 +54,7 @@ results_dir_list <- list(
   # imr - total
   imr.t.in.path = file.path(Sys.getenv("USERPROFILE"), "/Dropbox/UN IGME data/2020 Round Estimation/Code/output/IMR20200219_all/Results.csv"),
   # nmr 
-  nmr.t.in.path = file.path(Sys.getenv("USERPROFILE"), "/Dropbox/UN IGME data/2020 Round Estimation/Code/output/NMR_forDeathCalculation/Results_NMR_2020-08-14.csv"),
+  nmr.t.in.path = file.path(Sys.getenv("USERPROFILE"), "/Dropbox/UN IGME data/2020 Round Estimation/Code/output/NMR_forDeathCalculation/Results_NMR_2020-08-20.csv"),
   # 5-14
   mr5t14.t.in.path = file.path(Sys.getenv("USERPROFILE"), "/Dropbox/IGME 5-14/2020 Round Estimation/output/10q5-IGME2020GLOBALRUN-2_all/Results.csv"),
   # 15-24
@@ -75,4 +71,6 @@ results_dir_list <- list(
   imr.m.in.path = file.path(Sys.getenv("USERPROFILE"), "/Dropbox/CMEgender2015/data/output/M49_one/country-specific/male IMR_country.csv")
   
 )
-check.CC.profile.data(cc_dir, results_dir_list)
+dt_results <- read.all.results.csv(results_dir_list)
+compare.results.vs.cqt(dt_results, dt_cqt)
+check.CC.profile.data(cc_dir = cc_dir, results_dir_list = results_dir_list)
